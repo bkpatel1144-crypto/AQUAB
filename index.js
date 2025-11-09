@@ -84,8 +84,51 @@ app.get('/', async (req, res) => {
 // Create Invoice
 app.post('/api/invoices', async (req, res) => {
   try {
-    const invoice = new Invoice(req.body);
+    // Get date from req.body (format: YYYY-MM-DD, e.g., "2025-11-05")
+    const dateStr = req.body.date;
+    if (!dateStr) {
+      throw new Error('Date is required');
+    }
+
+    // Parse the date
+    const invoiceDate = new Date(dateStr);
+    if (isNaN(invoiceDate.getTime())) {
+      throw new Error('Invalid date format');
+    }
+
+    // Normalize to start and end of the day for querying
+    const startOfDay = new Date(invoiceDate);
+    startOfDay.setHours(0, 0, 0, 0);
+    const endOfDay = new Date(invoiceDate);
+    endOfDay.setHours(23, 59, 59, 999);
+
+    // Count existing invoices for this date
+    const count = await Invoice.countDocuments({
+      date: { $gte: startOfDay, $lte: endOfDay }
+    });
+
+    // Generate sequence number
+    const seq = count + 1;
+    const seqStr = seq.toString().padStart(2, '0');
+
+    // Generate date part: DDMMYYYY
+    const dayStr = invoiceDate.getDate().toString().padStart(2, '0');
+    const monthStr = (invoiceDate.getMonth() + 1).toString().padStart(2, '0');
+    const yearStr = invoiceDate.getFullYear().toString();
+    const base = `${dayStr}${monthStr}${yearStr}`;
+
+    // Set invoice number, e.g., 05112025/01
+    const invoiceNumber = `${base}/${seqStr}`;
+
+    // Create invoice
+    const invoiceData = {
+      ...req.body,
+      // date: invoiceDate,
+      invoiceNumber: invoiceNumber
+    };
+    const invoice = new Invoice(invoiceData);
     const savedInvoice = await invoice.save();
+
     res.status(201).json(savedInvoice);
   } catch (error) {
     res.status(400).json({ message: error.message });
