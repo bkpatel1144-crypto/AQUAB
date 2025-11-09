@@ -59,6 +59,43 @@ const invoiceSchema = new mongoose.Schema({
 
 const Invoice = mongoose.model('Invoice', invoiceSchema);
 
+async function generateInvoiceNumber(date) {
+  // Convert date from "2025-11-09" to "9112025"
+  const dateParts = date.split('-');
+  const year = dateParts[0];
+  const month = dateParts[1];
+  const day = dateParts[2];
+  
+  // Remove leading zero from day if present
+  const dayFormatted = parseInt(day).toString();
+  
+  // Create date prefix: DDMMYYYY
+  const datePrefix = `${dayFormatted}${month}${year}`;
+  
+  // Find all invoices with this date prefix
+  const existingInvoices = await Invoice.find({
+    invoiceNumber: { $regex: `^${datePrefix}/` }
+  }).sort({ invoiceNumber: 1 });
+  
+  // Determine the next sequence number
+  let nextSequence = 1;
+  
+  if (existingInvoices.length > 0) {
+    // Extract sequence numbers and find the highest
+    const sequences = existingInvoices.map(inv => {
+      const parts = inv.invoiceNumber.split('/');
+      return parseInt(parts[1]) || 0;
+    });
+    
+    const maxSequence = Math.max(...sequences);
+    nextSequence = maxSequence + 1;
+  }
+  
+  // Format sequence with leading zero if less than 10
+  const sequenceFormatted = nextSequence.toString().padStart(2, '0');
+  
+  return `${datePrefix}/${sequenceFormatted}`;
+}
 // Root route to show MongoDB status
 app.get('/', async (req, res) => {
   try {
@@ -85,49 +122,16 @@ app.get('/', async (req, res) => {
 // Create Invoice with auto-generated invoiceNumber
 app.post('/api/invoices', async (req, res) => {
   try {
-    const { date } = req.body;
-
-    // Convert ISO date "2025-11-05" to DD/MM/YYYY
-    const isoDate = new Date(date);
-    if (isNaN(isoDate)) {
-      return res.status(400).json({ message: 'Invalid date format' });
-    }
-
-    const day = String(isoDate.getDate()).padStart(2, '0');
-    const month = String(isoDate.getMonth() + 1).padStart(2, '0'); // +1 because months are 0-indexed
-    const year = isoDate.getFullYear();
-
-    const dateKey = `${day}${month}${year}`; // e.g., "09112025"
-
-    // Find the highest invoice number for this date
-    const lastInvoice = await Invoice.findOne(
-      { invoiceNumber: { $regex: `^${dateKey}/` } },
-      { invoiceNumber: 1 }
-    ).sort({ invoiceNumber: -1 });
-
-    let nextSeq = 1;
-    if (lastInvoice) {
-      const lastSeq = parseInt(lastInvoice.invoiceNumber.split('/')[1]);
-      nextSeq = lastSeq + 1;
-    }
-
-    const sequential = String(nextSeq).padStart(2, '0');
-    const invoiceNumber = `${dateKey}/${sequential}`;
-
-    // Create new invoice with generated invoiceNumber
-    const invoiceData = {
-      ...req.body,
-      invoiceNumber,
-    };
-
+    const invoiceData = req.body;
+    
+    // Generate invoice number based on date
+    const invoiceNumber = await generateInvoiceNumber(invoiceData.date);
+    invoiceData.invoiceNumber = invoiceNumber;
+    
     const invoice = new Invoice(invoiceData);
     const savedInvoice = await invoice.save();
-
     res.status(201).json(savedInvoice);
   } catch (error) {
-    if (error.code === 11000) {
-      return res.status(400).json({ message: 'Invoice number already exists (race condition)' });
-    }
     res.status(400).json({ message: error.message });
   }
 });
