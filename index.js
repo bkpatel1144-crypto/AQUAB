@@ -82,55 +82,52 @@ app.get('/', async (req, res) => {
 // CRUD Routes
 
 // Create Invoice
+// Create Invoice with auto-generated invoiceNumber
 app.post('/api/invoices', async (req, res) => {
   try {
-    // Get date from req.body (format: YYYY-MM-DD, e.g., "2025-11-05")
-    const dateStr = req.body.date;
-    if (!dateStr) {
-      throw new Error('Date is required');
+    const { date } = req.body;
+
+    // Convert ISO date "2025-11-05" to DD/MM/YYYY
+    const isoDate = new Date(date);
+    if (isNaN(isoDate)) {
+      return res.status(400).json({ message: 'Invalid date format' });
     }
 
-    // Parse the date
-    const invoiceDate = new Date(dateStr);
-    if (isNaN(invoiceDate.getTime())) {
-      throw new Error('Invalid date format');
+    const day = String(isoDate.getDate()).padStart(2, '0');
+    const month = String(isoDate.getMonth() + 1).padStart(2, '0'); // +1 because months are 0-indexed
+    const year = isoDate.getFullYear();
+
+    const dateKey = `${day}${month}${year}`; // e.g., "09112025"
+
+    // Find the highest invoice number for this date
+    const lastInvoice = await Invoice.findOne(
+      { invoiceNumber: { $regex: `^${dateKey}/` } },
+      { invoiceNumber: 1 }
+    ).sort({ invoiceNumber: -1 });
+
+    let nextSeq = 1;
+    if (lastInvoice) {
+      const lastSeq = parseInt(lastInvoice.invoiceNumber.split('/')[1]);
+      nextSeq = lastSeq + 1;
     }
 
-    // Normalize to start and end of the day for querying
-    const startOfDay = new Date(invoiceDate);
-    startOfDay.setHours(0, 0, 0, 0);
-    const endOfDay = new Date(invoiceDate);
-    endOfDay.setHours(23, 59, 59, 999);
+    const sequential = String(nextSeq).padStart(2, '0');
+    const invoiceNumber = `${dateKey}/${sequential}`;
 
-    // Count existing invoices for this date
-    const count = await Invoice.countDocuments({
-      date: { $gte: startOfDay, $lte: endOfDay }
-    });
-
-    // Generate sequence number
-    const seq = count + 1;
-    const seqStr = seq.toString().padStart(2, '0');
-
-    // Generate date part: DDMMYYYY
-    const dayStr = invoiceDate.getDate().toString().padStart(2, '0');
-    const monthStr = (invoiceDate.getMonth() + 1).toString().padStart(2, '0');
-    const yearStr = invoiceDate.getFullYear().toString();
-    const base = `${dayStr}${monthStr}${yearStr}`;
-
-    // Set invoice number, e.g., 05112025/01
-    const invoiceNumber = `${base}/${seqStr}`;
-
-    // Create invoice
+    // Create new invoice with generated invoiceNumber
     const invoiceData = {
       ...req.body,
-      // date: invoiceDate,
-      invoiceNumber: invoiceNumber
+      invoiceNumber,
     };
+
     const invoice = new Invoice(invoiceData);
     const savedInvoice = await invoice.save();
 
     res.status(201).json(savedInvoice);
   } catch (error) {
+    if (error.code === 11000) {
+      return res.status(400).json({ message: 'Invoice number already exists (race condition)' });
+    }
     res.status(400).json({ message: error.message });
   }
 });
